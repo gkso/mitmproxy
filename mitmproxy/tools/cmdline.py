@@ -89,6 +89,8 @@ def common_options(parser, opts):
     # Map Local
     group = parser.add_argument_group("Map Local")
     opts.make_parser(group, "map_local", metavar="PATTERN")
+    # wzj
+    opts.make_parser(group, "map_local_file", metavar="PATH")
 
     # Modify Body
     group = parser.add_argument_group("Modify Body")

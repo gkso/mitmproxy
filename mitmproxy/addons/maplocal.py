@@ -1,4 +1,5 @@
 import mimetypes
+import os
 import re
 import typing
 import urllib.parse
@@ -82,6 +83,7 @@ def file_candidates(url: str, spec: MapLocalSpec) -> typing.List[Path]:
 class MapLocal:
     def __init__(self):
         self.replacements: typing.List[MapLocalSpec] = []
+        self.non_regex_replacements: typing.Dict[str, str] = {}
 
     def load(self, loader):
         loader.add_option(
@@ -92,10 +94,21 @@ class MapLocal:
             separator can be any character.
             """
         )
+        # wzj
+        loader.add_option(
+            "map_local_file", typing.Optional[str], None,
+            """
+            A file containing the mapping between url and local path.
+            Only single page url to local file mapping is allowed.
+            Example: 
+                www.cnn.com, /home/user/www.cnn.com/index.html
+            """
+        )
 
     def configure(self, updated):
         if "map_local" in updated:
-            self.replacements = []
+            print(ctx.options.map_local)
+            #self.replacements = []
             for option in ctx.options.map_local:
                 try:
                     spec = parse_map_local_spec(option)
@@ -103,6 +116,19 @@ class MapLocal:
                     raise exceptions.OptionsError(f"Cannot parse map_local option {option}: {e}") from e
 
                 self.replacements.append(spec)
+        # wzj
+        if "map_local_file" in updated:
+            if os.path.exists(ctx.options.map_local_file):
+                f = open(ctx.options.map_local_file, 'r')
+                for line in f:
+                    url, local_path = line.split(',')
+                    url = url.strip()
+                    local_path = local_path.strip()
+                    print(url, local_path)
+                    self.non_regex_replacements[url] = local_path
+                f.close()
+            else:
+                raise exceptions.OptionsError("Cannot find map_local_file: %s" % ctx.options.map_local_file)
 
     def request(self, flow: http.HTTPFlow) -> None:
         if flow.reply and flow.reply.has_message:
@@ -146,6 +172,36 @@ class MapLocal:
                     )
                     # only set flow.response once, for the first matching rule
                     return
+
+        # wzj
+        for url2, local_path in self.non_regex_replacements.items():
+            ctx.log.debug("Comparing %s and %s" % (url, url2))
+            if url == "http://" + url2 or url == "https://" + url2 or url == "http://" + url2 + "/" or url == "https://" + url2 + "/":
+                ctx.log.info("Serving %s with local file %s" % (url, local_path))
+                all_candidates.append(local_path)
+                if os.path.isfile(local_path):
+                    headers = {
+                        "Server": version.MITMPROXY
+                    }
+                    mimetype = mimetypes.guess_type(local_path)[0]
+                    if mimetype:
+                        headers["Content-Type"] = mimetype
+
+                    try:
+                        with open(local_path) as f:
+                            contents = f.read()
+                    except OSError as e:
+                        ctx.log.warn(f"Could not read file: {e}")
+                        continue
+
+                    flow.response = http.HTTPResponse.make(
+                        200,
+                        contents,
+                        headers
+                    )
+                    # only set flow.response once, for the first matching rule
+                    return
+
         if all_candidates:
             flow.response = http.HTTPResponse.make(404)
             ctx.log.info(f"None of the local file candidates exist: {', '.join(str(x) for x in all_candidates)}")
